@@ -1,66 +1,80 @@
+require("dotenv").config();
 const express = require("express");
 const bodyParser = require("body-parser");
+const cors = require("cors");
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
-// Use body-parser to parse incoming JSON data
+// Middleware
+app.use(cors());
 app.use(bodyParser.json());
 
-// GET endpoint to provide usage instructions
-app.get("/email", (req, res) => {
+// Initialize Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
+
+// Healthcheck / Info
+app.get("/", (req, res) => {
   res.status(200).json({
-    message: "This is an email service API",
-    usage: "This endpoint receives webhooks from ForwardEmail.net"
+    message: "✅ Email Service API is live!",
+    endpoints: ["/email (POST)", "/inbox/:email (GET)"],
   });
 });
 
-// Endpoint to receive incoming emails from ForwardEmail
-app.post("/email", async (req, res) => {
-  try {
-    // ForwardEmail webhook format
-    const { from, to, subject, text, html } = req.body;
+// View inbox for specific email (optional helper)
+app.get("/inbox/:email", async (req, res) => {
+  const { email } = req.params;
 
-    console.log("Received an email from ForwardEmail!");
-    console.log(`From: ${from}`);
-    console.log(`To: ${to}`);
-    console.log(`Subject: ${subject}`);
-    console.log(`Text Body: ${text}`);
-    if (html) console.log(`HTML Body: ${html}`);
-
-    // Save the email data to Supabase
-    await saveEmailToSupabase(from, subject, text || html, to);
-    res.status(200).send("Email received and stored successfully.");
-  } catch (error) {
-    console.error("Error processing email:", error);
-    res.status(500).send("Error processing email.");
-  }
-});
-
-// Start the server
-app.listen(port, () => {
-  console.log(`Email service is running on port ${port}`);
-});
-
-// Function to save the email to Supabase
-async function saveEmailToSupabase(email, subject, body, recipient) {
-  // Initialize Supabase client
-  const { createClient } = require('@supabase/supabase-js');
-  const supabase = createClient(
-    'https://vzytnrfkvnlbnsiskbbf.supabase.co',
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6eXRucmZrdm5sYm5zaXNrYmJmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDM4NTQxOTIsImV4cCI6MjA1OTQzMDE5Mn0.HXAv0lCjrNqWizRxLP6fcqdwIv101kXlqS-k8G-67po'
-  );
-
-  // Insert email into the database
   const { data, error } = await supabase
-    .from('emails')
-    .insert([
-      { email, subject, body, recipient }
-    ]);
+    .from("emails")
+    .select("*")
+    .eq("recipient", email)
+    .order("created_at", { ascending: false });
 
   if (error) {
-    throw error;
+    console.error("Error fetching emails:", error);
+    return res.status(500).send("Failed to fetch inbox.");
   }
 
-  console.log("Email saved to Supabase:", data);
+  res.json(data);
+});
+
+// Handle incoming webhook from ForwardEmail
+app.post("/email", async (req, res) => {
+  console.log("📩 Incoming Email Webhook Body:", req.body);
+
+  try {
+    const { from, to, subject, text, html } = req.body;
+
+    await saveEmailToSupabase({
+      sender: from,
+      recipient: to,
+      subject: subject || "(No subject)",
+      body: text || html || "(No content)",
+    });
+
+    res.status(200).send("✅ Email received and saved.");
+  } catch (err) {
+    console.error("❌ Error saving email:", err);
+    res.status(500).send("❌ Failed to process email.");
+  }
+});
+
+// Save email to Supabase
+async function saveEmailToSupabase({ sender, recipient, subject, body }) {
+  const { data, error } = await supabase
+    .from("emails")
+    .insert([{ email: sender, recipient, subject, body }]);
+
+  if (error) throw error;
+  console.log("✅ Saved to Supabase:", data);
 }
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Email service running on port ${PORT}`);
+});
